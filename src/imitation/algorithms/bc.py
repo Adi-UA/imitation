@@ -492,6 +492,12 @@ class BC(algo_base.DemonstrationAlgorithm):
                 types.maybe_unwrap_dictobs(batch["obs"]),
             )
             acts = util.safe_to_tensor(batch["acts"], device=self.policy.device)
+
+            # Hotfix. PyTorch Generators (used by Torch Dataloaders) create tensors on the CPU by default.
+            # The following line moves the tensors to the GPU if the policy is on the GPU.
+            # Without this line, the training will fail since tensors will be on different devices.
+            acts = acts.to(self.policy.device)
+
             training_metrics = self.loss_calculator(self.policy, obs_tensor, acts)
 
             # Renormalise the loss to be averaged over the whole
