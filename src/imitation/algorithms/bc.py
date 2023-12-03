@@ -30,6 +30,7 @@ from imitation.data import rollout, types
 from imitation.policies import base as policy_base
 from imitation.util import logger as imit_logger
 from imitation.util import util
+from utils.utils import normalize_image, normalize_token_array
 
 
 @dataclasses.dataclass(frozen=True)
@@ -327,8 +328,12 @@ class BC(algo_base.DemonstrationAlgorithm):
         self.minibatch_size = minibatch_size or batch_size
         if self.batch_size % self.minibatch_size != 0:
             raise ValueError("Batch size must be a multiple of minibatch size.")
+
+        transitions, images_list, vocab_size = demonstrations
+        self.vocab_size = vocab_size
+        self.images_list = images_list
         super().__init__(
-            demonstrations=demonstrations,
+            demonstrations=transitions,
             custom_logger=custom_logger,
         )
         self._bc_logger = BCLogger(self.logger)
@@ -377,6 +382,39 @@ class BC(algo_base.DemonstrationAlgorithm):
             demonstrations,
             self.minibatch_size,
         )
+
+    def preprocess_batch(self, batch):
+        # Convert the batch to the format expected by the policy
+        batch["obs"] = [
+            {"image": self.images_list[img_idx], "text": text_obs}
+            for img_idx, text_obs in batch["obs"]
+        ]
+        batch["next_obs"] = [
+            {"image": self.images_list[img_idx], "text": text_obs}
+            for img_idx, text_obs in batch["next_obs"]
+        ]
+
+        # Normalize the images and tokens
+        batch["obs"] = [
+            {
+                "image": normalize_image(obs["image"]),
+                "text": normalize_token_array(obs["text"], self.vocab_size),
+            }
+            for obs in batch["obs"]
+        ]
+
+        batch["next_obs"] = [
+            {
+                "image": normalize_image(obs["image"]),
+                "text": normalize_token_array(obs["text"], self.vocab_size),
+            }
+            for obs in batch["next_obs"]
+        ]
+
+        batch["obs"], batch["next_obs"] = map(
+            types.DictObs.from_obs_list, (batch["obs"], batch["next_obs"])
+        )
+        return batch
 
     def train(
         self,
@@ -485,6 +523,8 @@ class BC(algo_base.DemonstrationAlgorithm):
             minibatch_size,
             num_samples_so_far,
         ), batch in batches_with_stats:
+            batch = self.preprocess_batch(batch)
+
             obs_tensor: Union[th.Tensor, Dict[str, th.Tensor]]
             # unwraps the observation if it's a dictobs and converts arrays to tensors
             obs_tensor = types.map_maybe_dict(
